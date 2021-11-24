@@ -1,0 +1,612 @@
+
+## Magdalena Maria Santarelli 
+## m.m.santarelli@tilburguniversity.edu 
+## STUDENT NUMBER: 2067598
+
+## DEGREE OF MASTER OF SCIENCE IN DATA SCIENCE & SOCIETY
+## DEPARTMENT OF COGNITIVE SCIENCE & ARTIFICIAL INTELLIGENCE 
+## SCHOOL OF HUMANITIES AND DIGITAL SCIENCES
+## TILBURG UNIVERSITY
+
+## Thesis committee: Dr. Bruno Nicenboim
+
+
+####################### THESIS SCRIPT ##########################################
+
+####################### Installing packages ####################################
+
+install.packages('mice')
+install.packages("lme4")
+install.packages("ggplot2")
+install.packages("caret")
+install.packages('sjPlot')
+install.packages("performance")
+install.packages('cvTools')
+install.packages('tidyr')
+install.packages('fastDummies')
+install.packages("devtools")
+install.packages("devtools")
+install.packages('jtools')
+install.packages("glmmTMB")
+
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(mice)
+library(caret)
+library(lme4)
+library(sjPlot)
+library(performance)
+library(cvTools)
+library(tidyr)
+library(fastDummies)
+library(devtools)
+library(devtools)
+library(jtools)
+library(huxtable)
+
+
+########################## Read Data ###########################################
+######### Retrived from  https://figshare.com/projects/SPALEX/29722
+
+memory.limit()
+memory.limit(360000)
+
+lexical <-
+  read.table(
+    'lexical.csv',
+    sep = ',',
+    header = TRUE,
+    fill = TRUE,
+    na.strings = c("", "NA")
+  )
+
+##Uploading users data set 
+users <-
+  read.table(
+    'users.csv',
+    sep = ',',
+    header = TRUE,
+    fill = TRUE,
+    na.strings = c("", "NA")
+  )
+
+## Uploading sessions data set
+sessions <-
+  read.table(
+    'sessions.csv',
+    sep = ',',
+    header = TRUE,
+    fill = TRUE,
+    na.strings = c("", "NA")
+  )
+
+## Uploading word information data set
+word.info <-
+  read.table(
+    'word_info.csv',
+    sep = ',',
+    header = TRUE,
+    fill = TRUE,
+    na.strings = c("", "NA")
+  )
+
+
+## Merging all the data sets together
+users.sessions <- merge(sessions, users, by = 'profile_id', all = T)
+users.sessions.lexical <-
+  merge(users.sessions, lexical, by = 'exp_id', all = T)
+
+## Remain only with latin users information
+latin_users <- users.sessions.lexical %>%
+  filter(!(country == 'España'))
+
+
+################################ EDA ##########################################
+
+## Selecting relevant features and filtering invalid observations
+latin_users_filt <- latin_users %>%
+  select(exp_id, profile_id, date, gender_rec, age, country, education_rec,
+         no_foreign_lang, best_foreign, trial_id, trial_order, spelling,
+         lexicality, rt, accuracy) %>%
+  ## Filter age
+  filter(!(age < 15 | age > 75)) %>%
+  ## Correct spelling mistakes
+  mutate(country = case_when(country == 'México' ~ 'Mexico',
+                             country == 'Panamá' ~ 'Panama',
+                             country == 'Perú' ~ 'Peru',
+                             country == 'República Dominicana' ~ 
+                               'Republica Dominicana',
+                             country == 'Argentina' ~ 'Argentina',
+                             country == 'Bolivia' ~ 'Bolivia',
+                             country == 'Chile' ~ 'Chile',
+                             country == 'Colombia' ~ 'Colombia',
+                             country == 'Costa Rica' ~ 'Costa Rica',
+                             country == 'Cuba' ~ 'Cuba',
+                             country == 'Ecuador' ~ 'Ecuador',
+                             country == 'El Salvador' ~ 'El Salvador',
+                             country == 'Guatemala' ~ 'Guatemala',
+                             country == 'Honduras' ~ 'Honduras',
+                             country == 'Nicaragua' ~ 'Nicaragua',
+                             country == 'Paraguay' ~ 'Paraguay',
+                             country == 'Uruguay' ~ 'Uruguay',
+                             country == 'Venezuela' ~ 'Venezuela')) %>%
+  ## Filtering outliers and invalid numbers
+  filter(!(age < 23 & education_rec >= 5)) %>%
+  filter(!(age < 25 & education_rec == 6)) %>%
+  filter(!(exp_id == 255661 | exp_id == 328323 | exp_id == 328361 | 
+             exp_id == 328400 | exp_id == 332767 | exp_id == 188960 | 
+             exp_id == 140633))
+
+## Read education systems variables
+ed_system <- read.csv('Ed_syst_latam.csv')
+
+## Merging education variables with participants characteristics
+latin_users_final <- merge(latin_users_filt, ed_system, 
+                           by = 'country', all = T)
+
+## Final data set to be used
+latin <- latin_users_final %>%
+  ## Group by participant
+  group_by(exp_id, country, gender_rec, age, education_rec, no_foreign_lang,
+           Mandatory_level, Free_higher_ed, Expenditure_in_high_ed....of.GDP.,
+           Access_to_high_ed) %>%
+  ## Obtain mean accuracy and mean recation time for each participant
+  ## Transform to seconds
+  summarise(mean_acc = mean(accuracy), mean_rt = (mean(rt) / 1000)) %>%
+  ## Create new variable ratio of reaction time and accuracy to penalize
+  ## reaction time
+  mutate(mean_perf = mean_rt / mean_acc) %>%
+  ## Assuming NA in number of foreign language = 0 (given there are no 0)
+  mutate(no_foreign_lang = case_when(is.na(no_foreign_lang) ~ 0,
+                                     no_foreign_lang == 1 ~ 1,
+                                     no_foreign_lang == 2 ~ 2,
+                                     no_foreign_lang == 3 ~ 3,
+                                     no_foreign_lang == 4 ~ 4,
+                                     no_foreign_lang == 5 ~ 5,
+                                     no_foreign_lang == 6 ~ 6,
+                                     no_foreign_lang == 7 ~ 7,
+                                     no_foreign_lang == 8 ~ 8,
+                                     no_foreign_lang == 9 ~ 9,
+                                     no_foreign_lang == 10 ~ 10,
+                                     no_foreign_lang == 11 ~ 11)) %>%
+  filter(!(no_foreign_lang > 5)) 
+
+
+## Preparing data for imputation
+latin_imp <- latin %>%
+  mutate(gender_rec = as.factor(gender_rec)) %>%
+  mutate(education_rec = as.factor(education_rec))
+
+
+init = mice(latin_imp, maxit=0) 
+meth = init$method
+predM = init$predictorMatrix
+
+## Defining methods for imputation
+meth[c("gender_rec")]="logreg"
+meth[c("education_rec")]="polr"
+
+set.seed(123)
+imputed = mice(latin_imp, method=meth, predictorMatrix=predM, m=5)
+
+## Imputed data set
+latin_imputed <- complete(imputed)
+
+
+### Finidig outliers in mean performance
+Q <- quantile(latin_imputed$mean_perf, probs=c(.25, .75), na.rm = FALSE)
+iqr <- IQR(latin_imputed$mean_perf)
+up <-  Q[2]+1.5*iqr # Upper Range  
+low<- Q[1]-1.5*iqr # Lower Range
+
+## deletin outliers above and below 1.5 box  lenght
+eliminated<- subset(latin_imputed, latin_imputed$mean_perf > (Q[1] - 1.5*iqr) & 
+                      latin_imputed$mean_perf < (Q[2]+1.5*iqr))
+
+## FInal data set to be used
+latin_imputed <- eliminated
+write.csv(latin_imputed, 'latin_VF_THESIS')
+sink('latin_VF_THESIS')
+
+latin_imputed <- latin_VF_THESIS
+########################## MODEL SET UP ########################################
+
+## Dummy coding categorical variables
+latin_dummy <- latin_imputed %>%
+  filter(!(country == "Panama")) %>%
+  dummy_cols(select_columns = c('Mandatory_level', 
+                                'Access_to_high_ed', "gender_rec",
+                                "Free_higher_ed",
+                                "Expenditure_in_high_ed....of.GDP."))
+  
+  
+
+## Plain model including all participants
+mod0 <- lmer(mean_perf ~ no_foreign_lang + education_rec +
+                 age + 
+                 gender_rec_F + gender_rec_M +
+                 (1|country), data = latin_dummy)
+
+summary(mod0)
+check_model(mod0)
+
+
+## Adding variables to the plain model
+
+## Adding mandatory level of education
+
+mod1 <- lmer(mean_perf ~ no_foreign_lang + education_rec +
+                 age + 
+                 gender_rec_F + gender_rec_M + Mandatory_level_1 + 
+                 Mandatory_level_2 + Mandatory_level_3 +
+                 (1|country), data = latin_dummy)
+
+
+summary(mod1)
+check_model(mod1)
+
+
+## Only high education participants (for high education variables)
+
+## Dummy coding categorical variables
+latin_dummy_he <- latin_imputed %>%
+  filter(!(country == "Panama")) %>%
+  filter(education_rec == 4 | education_rec == 5 | education_rec == 6) %>%
+  dummy_cols(select_columns = c('Mandatory_level', 
+                                'Access_to_high_ed', "gender_rec",
+                                "Free_higher_ed",
+                                "Expenditure_in_high_ed....of.GDP.")) 
+
+## Plain model including only high educated participants
+mod0.1 <- lmer(mean_perf ~ no_foreign_lang + education_rec +
+                 age + 
+                 gender_rec_F + gender_rec_M +
+                 (1|country), data = latin_dummy_he)
+
+
+summary(mod0.1)
+check_model(mod0.1)
+
+## Adding variables to the plain model
+
+## Adding access to higher education
+
+mod2 <- lmer(mean_perf ~ no_foreign_lang + education_rec + 
+                 age + 
+                 gender_rec_F + gender_rec_M +  
+                 Access_to_high_ed_Admission +  
+                 Access_to_high_ed_National + 
+                 Access_to_high_ed_Course + 
+                 (1|country), data = latin_dummy_he)
+
+summary(mod2)
+check_model(mod2)
+
+## Adding Free higher education 
+
+mod3 <- lmer(mean_perf ~ no_foreign_lang + education_rec +
+                 age + Free_higher_ed_Yes +
+                 Free_higher_ed_No +
+                 gender_rec_F + gender_rec_M +  
+                 (1|country), data = latin_dummy_he)
+
+summary(mod3)
+check_model(mod3)
+
+## Adding expenditure to higher education 
+
+mod4 <- lmer(mean_perf ~ no_foreign_lang + education_rec +
+                 age + Expenditure_in_high_ed....of.GDP._0.3 +
+                 Expenditure_in_high_ed....of.GDP._0.4 +
+                 Expenditure_in_high_ed....of.GDP._0.5 +
+                 Expenditure_in_high_ed....of.GDP._0.7 +
+                 Expenditure_in_high_ed....of.GDP._0.9 +
+                 Expenditure_in_high_ed....of.GDP._1 +
+                 Expenditure_in_high_ed....of.GDP._1.1 +
+                 Expenditure_in_high_ed....of.GDP._1.2 +
+                 Expenditure_in_high_ed....of.GDP._1.4 +
+                 Expenditure_in_high_ed....of.GDP._1.5 +
+                 Expenditure_in_high_ed....of.GDP._2 +
+                 Expenditure_in_high_ed....of.GDP._2.2 +
+                 Expenditure_in_high_ed....of.GDP._3 +
+                 gender_rec_F + gender_rec_M +  
+                 (1|country), data = latin_dummy_he)
+summary(mod4)
+check_model(mod4)
+
+###################### Implementing LOGOCV #####################################
+## Retrieved from: 
+## https://github.com/APEM-LTD/hetoolkit/blob/
+## f003761c1644d3276621aa8475ef93da76bd0cb3/R/model_logocv.R
+
+model_logocv <- function(model, data, group, control=NULL){
+  
+  ## error messages:
+  
+  # check that all arguments are provided
+  if(missing(model)) {stop("'model' is missing; specify a lmerMod or gam model 
+          object for cross-validation")}
+  if(missing(data)) {stop("'data' is missing; specify dataframe or tibble 
+          containing data used for model calibration")}
+  if(missing(group)) {stop("'group' is missing; specify the name of the 
+          random grouping factor in 'model'")}
+  
+  # check that model is one of supported types
+  if(class(model)[1] %in% c("lmerMod", "gam") == FALSE) 
+    {stop("'model' must be a lmerMod or gam object")}
+  
+  # check that data is a data frame or tibble
+  if(!is.data.frame(data)) {stop("'data' must be a dataframe or tibble")}
+  
+  # check that control is either NULL or a lmerControl object
+  if(missing(control) == FALSE && is.null(control) == FALSE){
+    if(!class(control)[1] == "lmerControl") 
+      {stop("'control' must be a lmerControl object")}
+  }
+  
+  # check that group variable is in data
+  if(group %in% colnames(data) == FALSE) 
+    {stop(paste0("'",group,"' cannot be found in 'data'"))}
+  
+  
+  
+  ## prep data for cross-validation
+  mod_class <- class(model)[1]
+  dat <- as.data.frame(data)
+  dat$grp <- dat[,group]
+  ntot <- dim(dat)[1] # total number of observations
+  gps <- unique(dat$grp)
+  ngps <- length(gps) # number of groups
+  dat$folds <- numeric(ntot)
+  predicted_cv <- numeric(ntot)
+  
+  ## extract formula and name of response variable
+  frm <- formula(model)
+  response <- all.vars(frm)[1]
+  
+  ## extract REML setting and optmizer (for lmer models only)
+  if(mod_class == "lmerMod"){
+    isREML <- ifelse(lme4::getME(model, "REML")==0, FALSE, TRUE)
+  }
+  
+  ## perform cross-validation
+  if(mod_class == "lmerMod"){
+    for(i in 1:ngps){
+      testIndexes <- which(dat$grp==gps[i], arr.ind=TRUE)
+      # drop group i to create training dataset
+      trainData <- dat[-testIndexes, ]
+      # create test dataset containing only group i
+      testData <- dat[testIndexes, ]
+      print(paste0("Fitting model for group ", i))
+      # train model on remaining groups
+      if(is.null(control)==TRUE){
+        train.mod <- lme4::lmer(frm, data=trainData, REML=isREML)
+      } else {
+        train.mod <- lme4::lmer(frm, data=trainData, 
+                                REML=isREML, control = control)
+      }
+      # predict for group i with random terms excluded
+      predicted_cv[testIndexes] <- predict(train.mod, 
+                                           newdata=testData,  re.form=NA)
+    }
+  }
+  
+  
+  
+  ## calculate residuals (predicted - observed) and RMSE
+  error_cv <- predicted_cv - dat[,response]
+  RMSE <- sqrt(mean(error_cv^2))
+  
+  
+  
+  ## create data frame or tibble to output
+  final_data = dplyr::bind_cols(data, data.frame(pred_cv = predicted_cv))
+  
+  return(list(RMSE = RMSE, data = final_data))
+  
+}
+
+########################## Model comparison ###################################
+
+## Plain model
+out0 <- model_logocv(model = mod0, data = latin_dummy, group = 'country')
+
+## Model with mandatory education variable
+out1 <- model_logocv(model = mod1, 
+                     data = latin_dummy, group = "country")
+
+## Plain model for high educated students
+
+out0.1 <- model_logocv(model = mod0.1, data = latin_dummy_he, group = 'country')
+
+## MOdel with access variable 
+out2 <- model_logocv(model = mod2, 
+                     data = latin_dummy_he, group = "country")
+
+## Model with free education
+out3 <- model_logocv(model = mod3, 
+                     data = latin_dummy_he, group = "country")
+
+## Model with expenditure in high education
+out4 <- model_logocv(model = mod4, 
+                     data = latin_dummy_he, group = "country")
+
+##### Obtaining RMSE from models
+## Model with all participants
+RMSE_mod0 <- out0[[1]]
+## Model with mandatory level of education (all participants)
+RMSE_mod1 <- out1[[1]]
+## Model with only highly educated participants
+RMSE_mod0.1 <- out0.1[[1]]
+## Model with access to higher education variable
+RMSE_mod2 <- out2[[1]]
+## Model with free higher education variable
+RMSE_mod3 <- out3[[1]]
+## Model with expenditure in high education variable
+RMSE_mod4 <- out4[[1]]
+
+
+RMSE_models_ <- cbind(RMSE_mod0, RMSE_mod1, RMSE_mod0.1, RMSE_mod2, 
+                     RMSE_mod3, RMSE_mod4)
+
+
+## FInal output tables of models
+capture.output(RMSE_models_, file = "RMSE_models_.txt")
+capture.output(summary(mod0), file = "Plain_model.txt")
+capture.output(summary(mod1), file = "Model_mandatory_ed.txt")
+capture.output(summary(mod0.1), file = "Plain_model_he.txt")
+capture.output(summary(mod2), file = "Model_access__h_ed.txt")
+capture.output(summary(mod3), file = "Model_free__h_ed.txt")
+capture.output(summary(mod4), file = "Model_exp__h_ed.txr")
+
+############################## Mod3 effects ####################################
+
+## Centering continuous variables
+no_foreign_cent <- scale(latin_dummy_he$no_foreign_lang)
+age_cent <- scale(latin_dummy_he$age)
+
+## Centered data set with continuous variables and dummy variables
+latin_cent <- latin_imputed %>%
+  filter(!(country == "Panama")) %>%
+  filter(education_rec == 4 | education_rec == 5 | education_rec == 6) %>%
+  dummy_cols(select_columns = c('Mandatory_level', 
+                                'Access_to_high_ed', "gender_rec",
+                                "Free_higher_ed",
+                                "Expenditure_in_high_ed....of.GDP.", 
+                                "education_rec")) %>%
+  mutate(no_foreign = no_foreign_cent) %>%
+  mutate(age_c = age_cent)
+  
+## Model 3 effects interpretation
+effect_mod3 <- lmer(mean_perf ~ no_foreign + education_rec_4 +
+                      education_rec_5 + education_rec_6 +
+                      age_c + Free_higher_ed_Yes +
+                      Free_higher_ed_No +
+                      gender_rec_F + gender_rec_M +  
+                      (1|country), data = latin_cent)
+
+
+tab_model(effect_mod3, title = "Table 12 - Model 3 effects")
+
+############################# RESULTS ##########################################
+
+## Compare models with ANOVA
+model_comp1 <- anova(mod0, mod1)
+capture.output(model_comp1, file = "Model comparisson 1.csv")
+
+##Compare models (highly educated participants) with ANOVA
+model_comp2 <- anova(mod0.1, mod2, mod3, mod4)
+capture.output(model_comp2, file = "Model comparisson 2.csv")
+
+## Exporting tables and model outputs
+tab_model(mod0, mod1, title = "Table 1 - Model 0 vs Model 1")
+capture.output(anova(mod0, mod1), file = "Anova Model 0, 1.csv")
+tab_model(mod0.1, mod2, title = "Table 4 - Model 0.1 vs Model 2")
+summary(mod0.1)
+summary(mod3)
+tab_model(mod0.1, mod3, title = "Table 6 - Model 0.1 vs Model 3")
+summary(mod4)
+tab_model(mod0.1, mod4, title = "Table 8 - Model 0.1 vs Model 4")
+capture.output(anova(mod0.1, mod2, mod3, mod4), file = "Anova he.csv")
+capture.output(ranef(mod0), file = "Random effects countries.csv")
+
+## Obtaining random effects
+ranef(mod0)
+ranef(mod1)
+ranef(mod0.1)
+ranef(mod2)
+ranef(mod3)
+ranef(mod4)
+
+## Plotting random effects
+re.effects <- plot_model(mod0, type = "re", show.values = TRUE) 
+
+## Data set for model 0 predictions
+data_mod <- data.frame(Predicted = out0[[2]], Observed = latin_dummy$mean_perf)
+
+## Plotting predictions model 0
+ggplot(data_mod,                                    
+       aes(x = Predicted.pred_cv,
+           y = Observed)) +
+  geom_point() +
+  geom_abline(intercept = 0,
+              slope = 1,
+              color = "red",
+              size = 2) +
+  ggtitle("Model 0 predicted vs observed")
+
+## Data set for model 1 predictions
+data_mod1 <- data.frame(Predicted = out1[[2]], Observed = latin_dummy$mean_perf)
+
+## Plotting predictions model 1
+ggplot(data_mod1,                                    
+       aes(x = Predicted.pred_cv,
+           y = Observed)) +
+  geom_point() +
+  geom_abline(intercept = 0,
+              slope = 1,
+              color = "red",
+              size = 2) +
+  ggtitle("Model 1 predicted vs observed")
+
+## Data set for model 0.1 predictions
+data_mod0.1 <- data.frame(Predicted = out0.1[[2]],
+                          Observed = latin_dummy_he$mean_perf)
+
+## Plotting predictions model 0.1
+ggplot(data_mod0.1,                                    
+       aes(x = Predicted.pred_cv,
+           y = Observed)) +
+  geom_point() +
+  geom_abline(intercept = 0,
+              slope = 1,
+              color = "red",
+              size = 2) +
+  ggtitle("Model 0.1 predicted vs observed")
+
+## Data set for model 2 predictions
+data_mod2 <- data.frame(Predicted = out2[[2]],  
+                          Observed = latin_dummy_he$mean_perf)
+
+## Plotting predictions
+ggplot(data_mod2,                                     
+       aes(x = Predicted.pred_cv,
+           y = Observed)) +
+  geom_point() +
+  geom_abline(intercept = 0,
+              slope = 1,
+              color = "red",
+              size = 2) +
+  ggtitle("Model 2 predicted vs observed")
+
+## Data set for model 3 predictions
+data_mod3 <- data.frame(Predicted = out3[[2]],  
+                        Observed = latin_dummy_he$mean_perf)
+
+## Plotting predictions
+ggplot(data_mod3,                                     
+       aes(x = Predicted.pred_cv,
+           y = Observed)) +
+  geom_point() +
+  geom_abline(intercept = 0,
+              slope = 1,
+              color = "red",
+              size = 2) +
+  ggtitle("Model 3 predicted vs observed")
+
+## Data set for model 4 predictions
+data_mod4 <- data.frame(Predicted = out4[[2]],  
+                        Observed = latin_dummy_he$mean_perf)
+
+## Plotting predictions
+ggplot(data_mod4,                                     
+       aes(x = Predicted.pred_cv,
+           y = Observed)) +
+  geom_point() +
+  geom_abline(intercept = 0,
+              slope = 1,
+              color = "red",
+              size = 2) +
+  ggtitle("Model 4 predicted vs observed")
+
