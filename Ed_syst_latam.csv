@@ -1,0 +1,19 @@
+country,Mandatory_level,Free_higher_ed,Expenditure_in_high_ed (% of GDP),Access_to_high_ed
+Argentina,3,Yes,1.1,Course
+Bolivia,3,No,2,Admission
+Chile,1,No,1.4,National
+Colombia,2,No,1,National
+Costa Rica,3,No,1.4,Admission
+Cuba,2,Yes,3,National
+Ecuador,3,Yes,2.2,National
+El Salvador,2,No,0.4,Admission
+Guatemala,2,No,0.3,Admission
+Honduras,3,No,0.9,Admission
+Mexico,3,No,1.1,National
+Nicaragua,1,No,1.2,Admission
+Panama             ,2,No,0.7,Admission
+Paraguay,3,No,0.5,Course
+Peru,3,No,0.7,Admission
+Republica Dominicana,3,No,0.3,National
+Uruguay,3,Yes,1.2,Course
+Venezuela,3,No,1.5,Admission
